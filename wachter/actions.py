@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 def on_error(bot: Bot, update: Update, error: TelegramError):
     logger.warning(f'Update "{update}" caused error "{error}"')
 
+def test():
+    pass
+
 
 def authorize_user(bot: Bot, chat_id: int, user_id: int):
     try:
