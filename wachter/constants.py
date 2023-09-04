@@ -1,4 +1,5 @@
 from enum import IntEnum, auto
+import time
 
 # MESSAGES
 on_set_new_message = "Обновил сообщение."
