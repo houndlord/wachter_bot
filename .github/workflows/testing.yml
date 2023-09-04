@@ -20,7 +20,7 @@ jobs:
     - name: Run pre-commit on Changed Files
       run: |
         # Sleep for 10 seconds to let the container initialize
-        sleep 10
+        sleep 30
         
         # Get container ID 
         CONTAINER_ID=$(docker ps -q --filter="name=wachter-dev")
