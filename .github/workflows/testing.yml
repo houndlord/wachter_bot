@@ -13,7 +13,6 @@ jobs:
     - name: Export token 
     env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_AUTOTEST_TOKEN }}
-        export TELEGRAM_TOKEN
     
     - name: Checkout repository
       uses: actions/checkout@v2
