@@ -23,7 +23,7 @@ jobs:
         sleep 10
         
         # Get container ID 
-        CONTAINER_ID=$(docker ps -q --filter="name=wachter-dev")
+        CONTAINER_ID=$(docker ps -q wachter-dev)
         export CONTAINER_ID
 
         # Export TELEGRAM_TOKEN to be used in container or scripts
