@@ -10,10 +10,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Export token 
-      env:
-        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_AUTOTEST_TOKEN }}
-    
     - name: Checkout repository
       uses: actions/checkout@v2
 
@@ -27,8 +23,11 @@ jobs:
         sleep 10
         
         # Get container ID 
-        CONTAINER_ID=$(CONTAINER_ID=$(docker ps -q wachter-dev))
+        CONTAINER_ID=$(docker ps -q --filter="name=wachter-dev")
         export CONTAINER_ID
+
+        # Export TELEGRAM_TOKEN to be used in container or scripts
+        export TELEGRAM_TOKEN=${{ secrets.TELEGRAM_AUTOTEST_TOKEN }}
 
         # Execute black inside container
         docker exec $CONTAINER_ID bash -c "pipenv run pre-commit run black --all-files"
