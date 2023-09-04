@@ -2,6 +2,7 @@ from __future__ import with_statement
 from alembic import context
 from sqlalchemy import create_engine, pool
 from logging.config import fileConfig
+import time
 
 import os, sys
 
