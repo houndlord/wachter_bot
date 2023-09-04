@@ -22,9 +22,6 @@ jobs:
         # Sleep for 10 seconds to let the container initialize
         sleep 10
         
-        # Get container ID 
-        CONTAINER_ID=$(docker ps -f name=wachter-dev -q)
-        export CONTAINER_ID
 
         # Export TELEGRAM_TOKEN to be used in container or scripts
         export TELEGRAM_TOKEN=${{ secrets.TELEGRAM_AUTOTEST_TOKEN }}
@@ -40,7 +37,7 @@ jobs:
 
     - name: Check Docker logs for errors
       run: |
-        logs=$(docker logs $CONTAINER_ID)
+        logs=$(docker logs wachter-dev)
         if echo $logs | grep -i "exited with code"; then
           echo "Found errors in Docker logs"
           exit 1
