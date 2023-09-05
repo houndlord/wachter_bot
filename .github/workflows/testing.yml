@@ -37,7 +37,8 @@ jobs:
         # Get list of changed files
           BASE_SHA=$(git rev-parse origin/${GITHUB_BASE_REF})
           HEAD_SHA=$(git rev-parse origin/${GITHUB_HEAD_REF})
-          FILES=$(git diff --name-only $BASE_SHA $HEAD_SHA)
+          FILES=$(git diff --name-only $BASE_SHA $HEAD_SHA | tr '\n' ' ')
+
           echo "Changed files: $FILES"
 
         # Execute black inside container
