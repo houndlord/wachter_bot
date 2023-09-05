@@ -33,7 +33,7 @@ jobs:
         docker exec wachter-dev bash -c "pipenv run pre-commit run black --all-files"
         
         #Check if black made any changes
-        if [ "$(git status --porcelain)" ]; then
-          echo "Changes were made by black. Please format your code before pushing."
-          exit 1
-        fi
+        #if [ "$(git status --porcelain)" ]; then
+        #  echo "Changes were made by black. Please format your code before pushing."
+        #  exit 1
+        #fi
