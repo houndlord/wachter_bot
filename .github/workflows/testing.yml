@@ -13,11 +13,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
 
-    - name: Export token
-      env:
-        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_AUTOTEST_TOKEN }}
 
     - name: Build and Run Docker Compose
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_AUTOTEST_TOKEN }}
       run: |
         docker-compose -f docker-compose.dev.yml up -d 
 
