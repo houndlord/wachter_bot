@@ -30,6 +30,7 @@ jobs:
     - name: Run pre-commit on Changed Files
       run: |
         #Execute black inside container
+        set -x
         docker exec wachter-dev bash -c "pipenv run pre-commit run black --all-files"
         
         #Check if black made any changes
