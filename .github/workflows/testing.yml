@@ -33,7 +33,7 @@ jobs:
     - name: Run pre-commit on Changed Files
       run: |
         # Get list of changed files
-        FILES=$(git show --name-only HEAD)
+        FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})
         
         # Execute black inside container
         set -x
