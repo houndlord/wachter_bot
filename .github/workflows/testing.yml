@@ -49,7 +49,7 @@ jobs:
 
         # Execute black inside container
           set -x
-          docker exec wachter-dev bash -c 'pipenv run black $FILES_QUOTED'
+          docker exec wachter-dev bash -c "pipenv run black $FILES_QUOTED"
         
         # Check if black made any changes
         #if [ "$(git status --porcelain)" ]; then
