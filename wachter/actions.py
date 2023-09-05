@@ -16,6 +16,7 @@ from . import constants
 import re
 import random
 import typing
+import time
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -25,7 +26,10 @@ logger = logging.getLogger(__name__)
 
 def on_error(bot: Bot, update: Update, error: TelegramError):
     logger.warning(f'Update "{update}" caused error "{error}"')
+print("de00dbeef")
 
+def sum(a, b):
+    return a**b
 
 def authorize_user(bot: Bot, chat_id: int, user_id: int):
     try:
