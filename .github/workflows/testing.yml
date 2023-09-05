@@ -43,7 +43,7 @@ jobs:
 
         # Execute black inside container
         set -x
-        docker exec wachter-dev bash -c 'pipenv run pre-commit run black --files "'"$FILES"'"'
+        docker exec wachter-dev bash -c 'pipenv run pre-commit run black --files \"$FILES\"'
         
         # Check if black made any changes
         #if [ "$(git status --porcelain)" ]; then
