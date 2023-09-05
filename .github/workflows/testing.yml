@@ -33,7 +33,7 @@ jobs:
     - name: Run pre-commit on Changed Files
       run: |
         # Get list of changed files
-        FILES=$(git diff --name-only HEAD^ --)
+        FILES=$(git show --name-only HEAD)
         
         # Execute black inside container
         set -x
