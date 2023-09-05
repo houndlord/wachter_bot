@@ -45,10 +45,11 @@ jobs:
           for file in $FILES; do
             FILES_QUOTED="$FILES_QUOTED '$file'"
           done
+          echo "Changed quoted files: $FILES_QUOTED"
 
         # Execute black inside container
-        set -x
-        docker exec wachter-dev bash -c 'pipenv run pre-commit run black --files $FILES_QUOTED'
+          set -x
+          docker exec wachter-dev bash -c 'pipenv run pre-commit run black --files $FILES_QUOTED'
         
         # Check if black made any changes
         #if [ "$(git status --porcelain)" ]; then
