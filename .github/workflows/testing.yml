@@ -13,6 +13,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
 
+    - name: Export token
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_AUTOTEST_TOKEN }}
+
     - name: Build and Run Docker Compose
       run: |
         docker-compose -f docker-compose.dev.yml up -d 
@@ -34,7 +38,7 @@ jobs:
         docker exec wachter-dev bash -c "pipenv run pre-commit run black --all-files"
         
         #Check if black made any changes
-        #if [ "$(git status --porcelain)" ]; then
-        #  echo "Changes were made by black. Please format your code before pushing."
-        #  exit 1
-        #fi
+        if [ "$(git status --porcelain)" ]; then
+          echo "Changes were made by black. Please format your code before pushing."
+          exit 1
+        fi
