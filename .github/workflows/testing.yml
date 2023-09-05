@@ -15,6 +15,14 @@ jobs:
       with:
         fetch-depth: 0  # fetches all commits
 
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v35
+      with:
+        files: |
+          py:
+            **/*.py
+
 
     - name: Build and Run Docker Compose
       env:
@@ -34,19 +42,7 @@ jobs:
 
     - name: Run pre-commit on Changed Files
       run: |
-        # Get list of changed files
-          BASE_SHA=$(git rev-parse origin/${GITHUB_BASE_REF})
-          HEAD_SHA=$(git rev-parse origin/${GITHUB_HEAD_REF})
-          FILES=$(git diff --name-only $BASE_SHA $HEAD_SHA | tr '\n' ' ')
-
-          echo "Changed files: $FILES"
-
-          FILES_QUOTED=""
-          for file in $FILES; do
-            FILES_QUOTED="$FILES_QUOTED '$file'"
-          done
-          echo "Changed quoted files: $FILES_QUOTED"
 
         # Execute black inside container
           set -x
-          docker exec wachter-dev bash -c "pipenv run black $FILES_QUOTED"
+          docker exec wachter-dev bash -c "pipenv run black ${{ steps.changed-files.py__changed_files }}"
