@@ -12,6 +12,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v2
+      with:
+        fetch-depth: 0  # fetches all commits
 
 
     - name: Build and Run Docker Compose
@@ -33,8 +35,11 @@ jobs:
     - name: Run pre-commit on Changed Files
       run: |
         # Get list of changed files
-        FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }})
-        
+          BASE_SHA=$(git rev-parse origin/${GITHUB_BASE_REF})
+          HEAD_SHA=$(git rev-parse origin/${GITHUB_HEAD_REF})
+          FILES=$(git diff --name-only $BASE_SHA $HEAD_SHA)
+          echo "Changed files: $FILES"
+
         # Execute black inside container
         set -x
         docker exec wachter-dev bash -c "pipenv run pre-commit run black --files $FILES"
