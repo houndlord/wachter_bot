@@ -145,6 +145,7 @@ def on_new_chat_member(bot: Bot, update: Update, job_queue: JobQueue):
                 "chat_id": chat_id,
                 "user_id": user_id,
                 "message_id": msg.message_id,
+                "timeout": timeout * 60,
             },
         )
 
@@ -657,6 +658,22 @@ def on_message(bot: Bot, update: Update, user_data: dict, job_queue: JobQueue):
             with session_scope() as sess:
                 chat = Chat(id=chat_id, kick_timeout=timeout)
                 sess.merge(chat)
+
+            jobs = job_queue.jobs()
+
+            for job in jobs:
+                context = job.context
+                timeout_value = context.get("timeout")
+
+                if timeout_value is not None:
+                    new_timeout = timeout * 60 - timeout_value
+                    if new_timeout > 0:
+                        job.schedule_removal()
+                        context["timeout"] = new_timeout
+                        job = job_queue.run_once(
+                            on_kick_timeout, new_timeout, context=context
+                        )
+
             user_data["action"] = None
 
             keyboard = [
