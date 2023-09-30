@@ -5,7 +5,6 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
 )
-import time
 from src.custom_filters import filter_bot_added
 from src.logging import tg_logger
 from src import handlers
