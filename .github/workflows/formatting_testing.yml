@@ -27,5 +27,5 @@ jobs:
       shell: bash
 
     - name: run pre-commit 
-      run: pre-commit run --all-files --show-diff-on-failure
+      run: pre-commit run --color=always --show-diff-on-failure
       shell: bash
