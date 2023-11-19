@@ -1,6 +1,5 @@
 import html
-from telegram import Update
-from telegram.constants import ParseMode
+from telegram import ParseMode, Update
 from telegram.ext import CallbackContext
 
 from src import constants

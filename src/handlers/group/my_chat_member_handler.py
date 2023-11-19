@@ -1,7 +1,5 @@
 from telegram import ChatMember, Update
-from telegram.ext import ContextTypes
-
-from sqlalchemy import select
+from telegram.ext import CallbackContext
 
 from src import constants
 from src.model import Chat, User, session_scope
@@ -9,14 +7,12 @@ from src.handlers.admin.utils import new_keyboard_layout
 from src.texts import _
 
 
-async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def my_chat_member_handler(update: Update, context: CallbackContext):
     old_status, new_status = update.my_chat_member.difference().get("status")
 
     if old_status == ChatMember.LEFT and new_status == ChatMember.MEMBER:
         # which means the bot was added to the chat
-        await context.bot.send_message(
-            update.effective_chat.id, _("msg__add_bot_to_chat")
-        )
+        context.bot.send_message(update.effective_chat.id, _("msg__add_bot_to_chat"))
         return
 
     if (
@@ -24,11 +20,8 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
         and new_status == ChatMember.ADMINISTRATOR
     ):
         # which means the bot is not admin and can be used
-        async with session_scope() as sess:
-            result = await sess.execute(
-                select(Chat).filter_by(id=update.effective_chat.id)
-            )
-            chat = result.scalars().first()
+        with session_scope() as sess:
+            chat = sess.query(Chat).filter(Chat.id == update.effective_chat.id).first()
 
             if chat is None:
                 chat = Chat(id=update.effective_chat.id)
@@ -52,7 +45,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
                     user_id=update.effective_user.id,
                     whois="",
                 )
-                await sess.merge(user)
+                sess.merge(user)
                 # notify the admin about a new chat
                 button_configs = [
                     [
@@ -72,7 +65,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup = new_keyboard_layout(
                     button_configs, update.effective_chat.id
                 )
-                await context.bot.send_message(
+                context.bot.send_message(
                     update.effective_user.id,
                     _("msg__make_admin_direct").format(
                         chat_name=update.effective_chat.title
@@ -80,5 +73,5 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
                     reply_markup=reply_markup,
                 )
 
-        await context.bot.send_message(update.effective_chat.id, _("msg__make_admin"))
+        context.bot.send_message(update.effective_chat.id, _("msg__make_admin"))
         return

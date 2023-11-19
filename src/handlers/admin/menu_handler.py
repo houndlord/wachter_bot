@@ -1,11 +1,8 @@
 import json
-from telegram import InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
+from telegram import InlineKeyboardMarkup, ParseMode, Update
+from telegram.ext import CallbackContext
 from datetime import datetime, timedelta
 from typing import Callable, Optional
-
-from sqlalchemy import select
 
 from src import constants
 from src.model import Chat, session_scope
@@ -24,8 +21,8 @@ from .utils import (
 from src.logging import tg_logger
 
 
-async def _job_rescheduling_helper(
-    job_func: Callable, timeout: int, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+def _job_rescheduling_helper(
+    job_func: Callable, timeout: int, context: CallbackContext, chat_id: int
 ) -> None:
     """
     This function helps in rescheduling a job in the Telegram bot's job queue.
@@ -33,7 +30,7 @@ async def _job_rescheduling_helper(
     Args:
     job_func (Callable): The function that is to be scheduled as a job. This is the callback function that is executed when the job runs.
     timeout (int): The amount of time (in minutes) after which the job should be executed.
-    context (ContextTypes.DEFAULT_TYPE): The callback context as provided by the Telegram API. This provides a context containing information about the current state of the bot and the update it is handling.
+    context (CallbackContext): The callback context as provided by the Telegram API. This provides a context containing information about the current state of the bot and the update it is handling.
     chat_id (int): The unique identifier for the chat. This is used to query the database for chat-specific settings.
 
     Returns:
@@ -44,8 +41,8 @@ async def _job_rescheduling_helper(
         # If the job's name matches the name of the job function provided
         if job.name == job_func.__name__:
             # Extracting the job context and calculating the new timeout
-            job_data = job.data
-            job_creation_time = datetime.fromtimestamp(job_data.get("creation_time"))
+            job_context = job.context
+            job_creation_time = datetime.fromtimestamp(job_context.get("creation_time"))
             new_timeout = job_creation_time + timedelta(seconds=timeout * 60)
 
             # If the new timeout is in the past, set it to 0
@@ -58,9 +55,10 @@ async def _job_rescheduling_helper(
             # If the job is a notification timeout, perform additional checks
             if job_func == on_notify_timeout:
                 # Querying the database to get the chat's kick timeout setting
-                async with session_scope() as sess:
-                    result = await sess.execute(select(Chat).filter(Chat.id == chat_id))
-                    chat: Optional[Chat] = result.scalars().first()
+                with session_scope() as sess:
+                    chat: Optional[Chat] = (
+                        sess.query(Chat).filter(Chat.id == chat_id).first()
+                    )
                     kick_timeout = chat.kick_timeout if chat else 0
 
                 # If the new timeout is greater than the kick timeout, skip to the next job
@@ -70,18 +68,15 @@ async def _job_rescheduling_helper(
                     continue
 
             # Update the job context with the new timeout
-            job_data["timeout"] = new_timeout
+            job_context["timeout"] = new_timeout
 
             # Schedule the new job with the updated context and timeout
-            job = context.job_queue.run_once(job_func, new_timeout, data=job_data)
+            job = context.job_queue.run_once(job_func, new_timeout, context=job_context)
 
 
-async def _get_current_settings_helper(
-    chat_id: int, settings: str, chat_name: str
-) -> str:
+def _get_current_settings_helper(chat_id: int, settings: str, chat_name: str) -> str:
     """
     Retrieve the current settings for a specific chat based on the settings category provided.
-    This function is now an asynchronous function.
 
     Args:
     chat_id (int): The ID of the chat for which the settings are to be retrieved.
@@ -90,12 +85,12 @@ async def _get_current_settings_helper(
     Returns:
     str: A formatted message string containing the current settings.
     """
-    async with session_scope() as session:
-        result = await session.execute(select(Chat).filter(Chat.id == chat_id))
-        chat: Optional[Chat] = result.scalars().first()
+    with session_scope() as session:
+        chat: Optional[Chat] = session.query(Chat).filter(Chat.id == chat_id).first()
+        if chat is None:
+            return "Chat not found."
 
         if settings == constants.Actions.get_current_intro_settings:
-            print("Loading intro settings for chat_id:", chat_id)
             return (
                 _("msg__get_intro_settings")
                 .format(chat_name=chat_name, **chat.__dict__)
@@ -110,13 +105,13 @@ async def _get_current_settings_helper(
 
 
 # todo rework into callback folder
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def button_handler(update: Update, context: CallbackContext) -> None:
     """
     Handle button presses in the Telegram bot's inline keyboard.
 
     Args:
     update (Update): The Telegram update object.
-    context (ContextTypes.DEFAULT_TYPE): The callback context as provided by the Telegram API.
+    context (CallbackContext): The callback context as provided by the Telegram API.
 
     Returns:
     None
@@ -126,14 +121,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if data["action"] == constants.Actions.start_select_chat:
         user_id = query.from_user.id
-        user_chats = await get_chats_list(user_id, context)
+        user_chats = get_chats_list(user_id, context)
+
         if len(user_chats) == 0:
-            await update.message.reply_text(_("msg__no_chats_available"))
+            update.message.reply_text(_("msg__no_chats_available"))
             return
+
         reply_markup = InlineKeyboardMarkup(
             create_chats_list_keyboard(user_chats, context, user_id)
         )
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             _("msg__start_command"),
             reply_markup=reply_markup,
             chat_id=query.message.chat_id,
@@ -158,8 +155,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ],
         ]
         reply_markup = new_keyboard_layout(button_configs, selected_chat_id)
-        chat_name = await get_chat_name(context.bot, selected_chat_id)
-        await context.bot.edit_message_text(
+        chat_name = get_chat_name(context.bot, selected_chat_id)
+        context.bot.edit_message_text(
             _("msg__select_chat").format(chat_name=chat_name),
             reply_markup=reply_markup,
             chat_id=query.message.chat_id,
@@ -219,7 +216,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             [{"text": _("btn__back"), "action": constants.Actions.select_chat}],
         ]
         reply_markup = new_keyboard_layout(button_configs, selected_chat_id)
-        await context.bot.edit_message_reply_markup(
+        context.bot.edit_message_reply_markup(
             reply_markup=reply_markup,
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -242,14 +239,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ],
             [
                 {
-                    "text": _("btn__change_kick_message"),
+                    "text": _("btn__change_kick_messge"),
                     "action": constants.Actions.set_on_kick_message,
                 }
             ],
             [{"text": _("btn__back"), "action": constants.Actions.select_chat}],
         ]
         reply_markup = new_keyboard_layout(button_configs, selected_chat_id)
-        await context.bot.edit_message_reply_markup(
+        context.bot.edit_message_reply_markup(
             reply_markup=reply_markup,
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -257,11 +254,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     elif data["action"] == constants.Actions.back_to_chats:
         user_id = query.message.chat_id
-        user_chats = await get_chats_list(user_id, context)
+        user_chats = list(get_chats_list(user_id, context))
         reply_markup = InlineKeyboardMarkup(
             create_chats_list_keyboard(user_chats, context, user_id)
         )
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             _("msg__start_command"),
             reply_markup=reply_markup,
             chat_id=query.message.chat_id,
@@ -269,7 +266,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif data["action"] == constants.Actions.set_on_new_chat_member_message_response:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_welcome_message"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -279,7 +276,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_kick_timeout:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_kick_timout"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -291,7 +288,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         data["action"]
         == constants.Actions.set_on_known_new_chat_member_message_response
     ):
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_rewelcome_message"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -301,7 +298,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_notify_message:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_notify_message"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -311,7 +308,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_on_new_chat_member_message_response:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_welcome_message"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -321,7 +318,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_on_successful_introducion_response:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_sucess_message"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -331,7 +328,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_whois_length:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_whois_length"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -340,7 +337,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_on_kick_message:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_kick_message"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -350,7 +347,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_notify_timeout:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_notify_timeout"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -359,7 +356,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = data["action"]
 
     elif data["action"] == constants.Actions.set_on_introduce_message_update:
-        await context.bot.edit_message_text(
+        context.bot.edit_message_text(
             text=_("msg__set_new_whois_message"),
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -378,13 +375,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
             ]
         ]
-        chat_name = await get_chat_name(context.bot, data["chat_id"])
+        chat_name = get_chat_name(context.bot, data["chat_id"])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        settings = await _get_current_settings_helper(
-            data["chat_id"], data["action"], chat_name
-        )
-        await context.bot.edit_message_text(
-            text=settings,
+        context.bot.edit_message_text(
+            text=_get_current_settings_helper(
+                data["chat_id"], data["action"], chat_name
+            ),
             parse_mode=ParseMode.MARKDOWN,
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -404,12 +400,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        chat_name = await get_chat_name(context.bot, data["chat_id"])
-        settings = await _get_current_settings_helper(
-            data["chat_id"], data["action"], chat_name
-        )
-        await context.bot.edit_message_text(
-            text=settings,
+        chat_name = get_chat_name(context.bot, data["chat_id"])
+        context.bot.edit_message_text(
+            text=_get_current_settings_helper(
+                data["chat_id"], data["action"], chat_name
+            ),
             parse_mode=ParseMode.MARKDOWN,
             chat_id=query.message.chat_id,
             message_id=query.message.message_id,
@@ -419,13 +414,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["action"] = None
 
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def message_handler(update: Update, context: CallbackContext) -> None:
     """
     Handle text messages received by the Telegram bot.
 
     Args:
     update (Update): The Telegram update object.
-    context (ContextTypes.DEFAULT_TYPE): The callback context as provided by the Telegram API.
+    context (CallbackContext): The callback context as provided by the Telegram API.
 
     Returns:
     None: This function returns nothing.
@@ -449,15 +444,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 timeout = int(message)
                 assert timeout >= 0
             except:
-                await update.message.reply_text(
-                    _("msg__failed_set_kick_timeout_response")
-                )
+                update.message.reply_text(_("msg__failed_set_kick_timeout_response"))
                 return
-            async with session_scope() as sess:
+            with session_scope() as sess:
                 chat = Chat(id=chat_id, kick_timeout=timeout)
-                await sess.merge(chat)
+                sess.merge(chat)
             context.user_data["action"] = None
-            await _job_rescheduling_helper(on_kick_timeout, timeout, context, chat_id)
+            _job_rescheduling_helper(on_kick_timeout, timeout, context, chat_id)
 
             keyboard = [
                 [
@@ -469,7 +462,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
+            update.message.reply_text(
                 _("msg__success_set_kick_timeout_response"),
                 reply_markup=reply_markup,
             )
@@ -480,13 +473,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 timeout = int(message)
                 assert timeout >= 0
             except:
-                await update.message.reply_text(_("msg__failed_kick_response"))
+                update.message.reply_text(_("msg__failed_kick_response"))
                 return
-            async with session_scope() as sess:
+            with session_scope() as sess:
                 chat = Chat(id=chat_id, notify_timeout=timeout)
-                await sess.merge(chat)
+                sess.merge(chat)
             context.user_data["action"] = None
-            await _job_rescheduling_helper(on_notify_timeout, timeout, context, chat_id)
+            _job_rescheduling_helper(on_notify_timeout, timeout, context, chat_id)
 
             keyboard = [
                 [
@@ -496,7 +489,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
+            update.message.reply_text(
                 _("msg__sucess_set_notify_timeout_response"),
                 reply_markup=reply_markup,
             )
@@ -510,11 +503,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             constants.Actions.set_whois_length,
             constants.Actions.set_on_introduce_message_update,
         ]:
-            message = update.message.text_markdown.replace(
-                "%USER\_MENTION%", "%USER_MENTION%"
-            )
+            message = update.message.text_markdown
             reply_message = _("msg__set_new_message")
-            async with session_scope() as sess:
+            with session_scope() as sess:
                 if action == constants.Actions.set_on_new_chat_member_message_response:
                     chat = Chat(id=chat_id, on_new_chat_member_message=message)
                 if (
@@ -535,7 +526,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         chat = Chat(id=chat_id, whois_length=whois_length)
                         reply_message = _("msg__sucess_whois_length")
                     except:
-                        await update.message.reply_text(_("msg__failed_whois_response"))
+                        update.message.reply_text(_("msg__failed_whois_response"))
                         return
 
                 if action == constants.Actions.set_on_introduce_message_update:
@@ -543,12 +534,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         "#update"
                         not in update.message.parse_entities(types=["hashtag"]).values()
                     ):
-                        await update.message.reply_text(
+                        update.message.reply_text(
                             _("msg__need_hashtag_update_response")
                         )
                         return
                     chat = Chat(id=chat_id, on_introduce_message_update=message)
-                await sess.merge(chat)
+                sess.merge(chat)
 
             if action in [
                 constants.Actions.set_on_kick_message,
@@ -576,4 +567,4 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data["action"] = None
 
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(reply_message, reply_markup=reply_markup)
+            update.message.reply_text(reply_message, reply_markup=reply_markup)

@@ -1,22 +1,15 @@
 import json
 from typing import Iterator, Dict, List
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
-
-from sqlalchemy import select
 
 from src.logging import tg_logger
 from src.model import User, session_scope
 from src import constants
 
 
-async def get_chat_name(bot, chat_id):
-    chat = await bot.get_chat(chat_id)
-    return chat.title or str(chat_id)
-
-
-def new_button(text: str, chat_id: int, action) -> InlineKeyboardButton:
+def new_button(text: str, chat_id: int, action: str) -> InlineKeyboardButton:
     """
     Create a new InlineKeyboardButton with associated callback data.
 
@@ -52,9 +45,9 @@ def new_keyboard_layout(
     return InlineKeyboardMarkup(keyboard)
 
 
-async def authorize_user(bot: Bot, chat_id: int, user_id: int) -> bool:
+def authorize_user(bot: Bot, chat_id: int, user_id: int) -> bool:
     """
-    Asynchronously check if a user is an administrator or the creator of a chat.
+    Check if a user is an administrator or the creator of a chat.
 
     Args:
     bot (Bot): The Telegram Bot instance.
@@ -65,47 +58,55 @@ async def authorize_user(bot: Bot, chat_id: int, user_id: int) -> bool:
     bool: True if the user is an administrator or creator of the chat, False otherwise.
     """
     try:
-        chat_member = await bot.get_chat_member(chat_id, user_id)
-        return chat_member.status in ["creator", "administrator"]
+        status = bot.get_chat_member(chat_id, user_id).status
+        return status in ["creator", "administrator"]
     except Exception as e:
-        print(f"Failed to check if user {user_id} is admin in chat {chat_id}: {e}")
         return False
 
 
-async def get_chats_list(
-    user_id: int, context: CallbackContext
-) -> List[Dict[str, int]]:
+def get_chats_list(user_id: int, context: CallbackContext) -> Iterator[Dict[str, int]]:
     """
     Retrieve a list of chats where the user is an administrator or creator.
 
-    This function queries the database for User instances associated with the provided
-    user_id. For each User instance found, it checks whether the provided user_id
-    is an authorized user of the associated chat. If so, the function retrieves the
-    chat's title and id, and adds them to a list which is returned after all
-    authorized chats have been processed.
-
     Args:
-        user_id (int): The ID of the user.
-        context (CallbackContext): The callback context as provided by the Telegram Bot API.
+    user_id (int): The ID of the user.
+    context (CallbackContext): The callback context as provided by the Telegram API.
 
     Returns:
-        List[Dict[str, int]]: A list of dictionaries, each containing the 'title' and 'id'
-        of a chat where the user has administrative or creator rights.
+    Iterator[Dict[str, int]]: An iterator over dictionaries containing chat information.
     """
-    async with session_scope() as session:  # Ensure this yields an AsyncSession object.
-        result = await session.execute(select(User).filter(User.user_id == user_id))
-        users = result.scalars().all()
-    chats_list = []
-    for user in users:
+    with session_scope() as sess:
+        users = sess.query(User).filter(User.user_id == user_id).all()
+        # need that to terminate the session before running the expensive _get_chats_helper
+        # AND be able to use the `users` list
+        for user in users:
+            sess.expunge(user)
+    return _get_chats_helper(users, user_id, context.bot)
+
+
+def _get_chats_helper(
+    users: Iterator[User], user_id: int, bot: Bot
+) -> Iterator[Dict[str, int]]:
+    """
+    Helper function to get chat information for each user.
+
+    Args:
+    users (Iterator[User]): An iterator over User instances.
+    user_id (int): The ID of the user.
+    bot (Bot): The Telegram Bot instance.
+
+    Returns:
+    Iterator[Dict[str, int]]: An iterator over dictionaries containing chat information.
+    """
+    for x in users:
         try:
-            if await authorize_user(context.bot, user.chat_id, user_id):
-                chat_name = await get_chat_name(context.bot, user.chat_id)
-                chats_list.append({"title": chat_name, "id": user.chat_id})
+            if authorize_user(bot, x.chat_id, user_id):
+                yield {
+                    "title": get_chat_name(bot, x.chat_id),
+                    "id": x.chat_id,
+                }
         except Exception as e:
-            context.bot.logger.exception(
-                e
-            )  # Ensure your CallbackContext has a logger configured.
-    return chats_list
+            tg_logger.exception(e)
 
 
 def create_chats_list_keyboard(
@@ -127,3 +128,7 @@ def create_chats_list_keyboard(
         for chat in user_chats
         if authorize_user(context.bot, chat["id"], user_id)
     ]
+
+
+def get_chat_name(bot: Bot, chat_id: int):
+    return bot.get_chat(chat_id).title or str(chat_id)
