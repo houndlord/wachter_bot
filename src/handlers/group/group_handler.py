@@ -1,10 +1,7 @@
 from datetime import datetime, timedelta
 import random
-from telegram import Bot, Message, Update
-from telegram.constants import ParseMode
-from telegram.ext import ContextTypes
-
-from sqlalchemy import select
+from telegram import Bot, Message, ParseMode, Update
+from telegram.ext import CallbackContext
 
 from src.logging import tg_logger
 from src import constants
@@ -12,9 +9,7 @@ from src.texts import _
 from src.model import Chat, User, session_scope
 
 
-async def on_new_chat_members(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+def on_new_chat_members(update: Update, context: CallbackContext) -> None:
     """
     Handle the event when a new member joins a chat.
 
@@ -32,35 +27,30 @@ async def on_new_chat_members(
 
     for user_id in user_ids:
         for job in context.job_queue.jobs():
-            if job.user_id == user_id and job.chat_id == chat_id:
+            # user_id doesn't exist in some jobs, chat_id exist always
+            # TODO schematize this
+            if (
+                job.context.get("user_id") == user_id
+                and job.context["chat_id"] == chat_id
+            ):
                 job.schedule_removal()
 
-        async with session_scope() as sess:
-            result = await sess.execute(
-                select(User).where(User.chat_id == chat_id, User.user_id == user_id)
+        with session_scope() as sess:
+            user = (
+                sess.query(User)
+                .filter(User.chat_id == chat_id, User.user_id == user_id)
+                .first()
             )
-            user = result.scalars().first()
-            chat_result = await sess.execute(select(Chat).where(Chat.id == chat_id))
-            chat = chat_result.scalars().first()
+            chat = sess.query(Chat).filter(Chat.id == chat_id).first()
 
             if chat is None:
                 chat = Chat(id=chat_id)
                 sess.add(chat)
-                await sess.commit()
+                sess.commit()
 
             if user is not None:
-                message = await update.message.reply_text(
-                    chat.on_known_new_chat_member_message
-                )
-
-                context.job_queue.run_once(
-                    delete_message,
-                    constants.default_delete_message * 60,  # 1h
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    data={
-                        "message_id": message.message_id,
-                    },
+                _send_message_with_deletion(
+                    context, chat_id, user_id, chat.on_known_new_chat_member_message
                 )
                 continue
 
@@ -71,21 +61,29 @@ async def on_new_chat_members(
         if message == _("msg__skip_new_chat_member"):
             continue
 
-        message_markdown = await _mention_markdown(
-            context.bot, chat_id, user_id, message
-        )
-        msg = await update.message.reply_text(
-            message_markdown, parse_mode=ParseMode.MARKDOWN
+        message_markdown = _mention_markdown(context.bot, chat_id, user_id, message)
+        msg = update.message.reply_text(message_markdown, parse_mode=ParseMode.MARKDOWN)
+
+        # hack to delete welcome message even if kick_timeout is 0
+        context.job_queue.run_once(
+            delete_message,
+            # 1 week which is considered infinity
+            constants.default_delete_message_timeout_m * 24 * 7 * 60,
+            context={
+                "chat_id": chat_id,
+                "user_id": user_id,
+                # so that the #whois message will delete this one
+                "message_id": msg.message_id,
+            },
         )
 
         if kick_timeout != 0:
             job = context.job_queue.run_once(
                 on_kick_timeout,
                 kick_timeout * 60,
-                chat_id=chat_id,
-                user_id=user_id,
-                data={
-                    "message_id": msg.message_id,
+                context={
+                    "chat_id": chat_id,
+                    "user_id": user_id,
                     "creation_time": datetime.now().timestamp(),
                 },
             )
@@ -94,18 +92,16 @@ async def on_new_chat_members(
             job = context.job_queue.run_once(
                 on_notify_timeout,
                 notify_timeout * 60,
-                chat_id=chat_id,
-                user_id=user_id,
-                data={
+                context={
+                    "chat_id": chat_id,
+                    "user_id": user_id,
                     "job_queue": context.job_queue,
                     "creation_time": datetime.now().timestamp(),
                 },
             )
 
 
-async def on_hashtag_message(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+def on_hashtag_message(update: Update, context: CallbackContext) -> None:
     """
     Handle messages containing #whois hashtag.
 
@@ -123,111 +119,73 @@ async def on_hashtag_message(
     chat_id = update.message.chat_id
 
     if (
-        "#whois" in await update.message.parse_entities(types=["hashtag"]).values()
+        "#whois" in update.message.parse_entities(types=["hashtag"]).values()
         and chat_id < 0
     ):
         user_id = update.message.from_user.id
 
-        async with session_scope() as sess:
-            chat_result = await sess.execute(select(Chat).where(Chat.id == chat_id))
-            chat = chat_result.scalars().first()
+        with session_scope() as sess:
+            chat = sess.query(Chat).filter(Chat.id == chat_id).first()
+
             if chat is None:
                 chat = Chat(id=chat_id)
                 sess.add(chat)
-                await sess.commit()
+                sess.commit()
 
             if len(update.message.text) <= chat.whois_length:
-                message_markdown = await _mention_markdown(
-                    # TODO move to chat DB
-                    context.bot,
+                _send_message_with_deletion(
+                    context,
                     chat_id,
                     user_id,
                     _("msg__short_whois").format(whois_length=chat.whois_length),
-                )
-                message = await update.message.reply_text(
-                    message_markdown, parse_mode=ParseMode.MARKDOWN
-                )
-
-                context.job_queue.run_once(
-                    delete_message,
-                    constants.default_delete_message * 60,  # 1h
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    data={
-                        "message_id": message.message_id,
-                    },
                 )
                 return
 
             message = chat.on_introduce_message
 
-        async with session_scope() as sess:
-            result = await sess.execute(
-                select(User).where(User.chat_id == chat_id, User.user_id == user_id)
+            existing_user = (
+                sess.query(User)
+                .filter(User.chat_id == chat_id, User.user_id == user_id)
+                .first()
             )
-            existing_user = result.scalars().first()
             if (
                 existing_user
                 and "#update"
-                not in await update.message.parse_entities(types=["hashtag"]).values()
+                not in update.message.parse_entities(types=["hashtag"]).values()
+                and existing_user.whois != ""
             ):
-                message_markdown = await _mention_markdown(
-                    context.bot, chat_id, user_id, _("msg__introduce_message_update")
-                )
-                message = await update.message.reply_text(
-                    message_markdown, parse_mode=ParseMode.MARKDOWN
-                )
-
-                context.job_queue.run_once(
-                    delete_message,
-                    constants.default_delete_message * 60,  # 1h
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    data={
-                        "message_id": message.message_id,
-                    },
+                _send_message_with_deletion(
+                    context,
+                    chat_id,
+                    user_id,
+                    chat.on_introduce_message_update,
                 )
                 return
 
             user = User(chat_id=chat_id, user_id=user_id, whois=update.message.text)
-            await sess.merge(user)
+            sess.merge(user)
 
-        removed = False
         for job in context.job_queue.jobs():
-            if job.user_id == user_id and job.chat_id == chat_id:
-                if "message_id" in job.data:
+            if (
+                job.context.get("user_id") == user_id
+                and job.context["chat_id"] == chat_id
+            ):
+                if "message_id" in job.context:
                     try:
-                        await context.bot.delete_message(
-                            job.chat_id, job.data["message_id"]
+                        context.bot.delete_message(
+                            job.context["chat_id"], job.context["message_id"]
                         )
                     except Exception as e:
                         tg_logger.warning(
-                            f"can't delete {job.data['message_id']} from {job.chat_id}",
+                            f"can't delete {job.context['message_id']} from {job.context['chat_id']}",
                             exc_info=e,
                         )
                 job.schedule_removal()
-                removed = True
 
-        if removed:
-            message_markdown = await _mention_markdown(
-                context.bot, chat_id, user_id, message
-            )
-            message = await update.message.reply_text(
-                message_markdown, parse_mode=ParseMode.MARKDOWN
-            )
-
-            context.job_queue.run_once(
-                delete_message,
-                constants.default_delete_message * 60,  # 1h
-                data={
-                    "chat_id": chat_id,
-                    "user_id": user_id,
-                    "message_id": message.message_id,
-                },
-            )
+        _send_message_with_deletion(context, chat_id, user_id, message)
 
 
-async def on_notify_timeout(context: ContextTypes.DEFAULT_TYPE):
+def on_notify_timeout(context: CallbackContext):
     """
     Send notify message, schedule its deletion.
 
@@ -237,33 +195,19 @@ async def on_notify_timeout(context: ContextTypes.DEFAULT_TYPE):
     Returns:
     None
     """
-    bot, job = context.bot, context.job
-    async with session_scope() as sess:
-        chat_result = await sess.execute(
-            select(Chat).filter(Chat.id == job.data["chat_id"])
-        )
-        chat = chat_result.scalar_one_or_none()
-
-        message_markdown = await _mention_markdown(
-            bot, job.chat_id, job.user_id, chat.notify_message
-        )
-
-        message = await bot.send_message(
-            job.chat_id, text=message_markdown, parse_mode=ParseMode.MARKDOWN
-        )
-
-        job.data["job_queue"].run_once(
-            delete_message,
-            (chat.kick_timeout - chat.notify_timeout) * 60,
-            data={
-                "chat_id": job.data["chat_id"],
-                "user_id": job.data["user_id"],
-                "message_id": message.message_id,
-            },
+    job = context.job
+    with session_scope() as sess:
+        chat = sess.query(Chat).filter(Chat.id == job.context["chat_id"]).first()
+        _send_message_with_deletion(
+            context,
+            job.context["chat_id"],
+            job.context["user_id"],
+            chat.notify_message,
+            chat.kick_timeout - chat.notify_timeout,
         )
 
 
-async def on_kick_timeout(context: ContextTypes.DEFAULT_TYPE) -> None:
+def on_kick_timeout(context: CallbackContext) -> None:
     """
     Kick a user from the chat after a set amount of time and send a message about it.
 
@@ -274,63 +218,34 @@ async def on_kick_timeout(context: ContextTypes.DEFAULT_TYPE) -> None:
     None
     """
     bot, job = context.bot, context.job
-    try:
-        await bot.delete_message(job.chat_id, job.data["message_id"])
-    except Exception as e:
-        tg_logger.warning(
-            f"can't delete {job.data['message_id']} from {job.chat_id}",
-            exc_info=e,
-        )
 
     try:
-        await bot.ban_chat_member(
-            job.chat_id,
-            job.user_id,
+        bot.kick_chat_member(
+            job.context["chat_id"],
+            job.context["user_id"],
             until_date=datetime.now() + timedelta(seconds=60),
         )
 
-        async with session_scope() as sess:
-            chat_result = await sess.execute(select(Chat).where(Chat.id == job.chat_id))
-            chat = chat_result.scalar_one_or_none()
-
+        with session_scope() as sess:
+            chat = sess.query(Chat).filter(Chat.id == job.context["chat_id"]).first()
             if chat.on_kick_message.lower() not in ["false", "0"]:
-                message_markdown = await _mention_markdown(
-                    bot,
-                    job.chat_id,
-                    job.user_id,
+                _send_message_with_deletion(
+                    context,
+                    job.context["chat_id"],
+                    job.context["user_id"],
                     chat.on_kick_message,
-                )
-                message = await bot.send_message(
-                    job.chat_id,
-                    text=message_markdown,
-                    parse_mode=ParseMode.MARKDOWN,
-                )
-
-                context.job_queue.run_once(
-                    delete_message,
-                    constants.default_delete_message * 60,  # 1h
-                    chat_id=job.chat_id,
-                    user_id=job.user_id,
-                    data={
-                        "message_id": message.message_id,
-                    },
                 )
     except Exception as e:
         tg_logger.exception(e)
-        message = await bot.send_message(
-            job.chat_id, text=_("msg__failed_kick_response")
-        )
-
-        context.job_queue.run_once(
-            delete_message,
-            constants.default_delete_message * 60,  # 1h
-            data={
-                "message_id": message.message_id,
-            },
+        _send_message_with_deletion(
+            context,
+            job.context["chat_id"],
+            job.context["user_id"],
+            _("msg__failed_kick_response"),
         )
 
 
-async def delete_message(context: ContextTypes.DEFAULT_TYPE) -> None:
+def delete_message(context: CallbackContext) -> None:
     """
     Delete a message from a chat.
 
@@ -342,17 +257,15 @@ async def delete_message(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     bot, job = context.bot, context.job
     try:
-        await bot.delete_message(job.data["chat_id"], job.data["message_id"])
+        bot.delete_message(job.context["chat_id"], job.context["message_id"])
     except Exception as e:
         tg_logger.warning(
-            f"can't delete {job.data['message_id']} from {job.chat_id}",
+            f"can't delete {job.context['message_id']} from {job.context['chat_id']}",
             exc_info=e,
         )
 
 
-async def _mention_markdown(
-    bot: Bot, chat_id: int, user_id: int, message: Message
-) -> str:
+def _mention_markdown(bot: Bot, chat_id: int, user_id: int, message: str) -> str:
     """
     Format a message to include a markdown mention of a user.
 
@@ -360,13 +273,12 @@ async def _mention_markdown(
     bot (Bot): The Telegram bot instance.
     chat_id (int): The ID of the chat.
     user_id (int): The ID of the user to mention.
-    message (Message): The message to format.
+    message (str): The message to format.
 
     Returns:
     str: The formatted message with the user mention.
     """
-    chat_member = await bot.get_chat_member(chat_id, user_id)
-    user = chat_member.user
+    user = bot.get_chat_member(chat_id, user_id).user
     if not user.name:
         # если пользователь удален, у него пропадает имя и markdown выглядит так: (tg://user?id=666)
         user_mention_markdown = ""
@@ -374,4 +286,27 @@ async def _mention_markdown(
         user_mention_markdown = user.mention_markdown()
 
     # \ нужен из-за формата сообщений в маркдауне
-    return message.replace("%USER_MENTION%", user_mention_markdown)
+    return message.replace("%USER\_MENTION%", user_mention_markdown)
+
+
+def _send_message_with_deletion(
+    context: CallbackContext,
+    chat_id: int,
+    user_id: int,
+    message: str,
+    timeout_m: int = constants.default_delete_message_timeout_m,
+):
+    message_markdown = _mention_markdown(context.bot, chat_id, user_id, message)
+
+    sent_message = context.bot.send_message(
+        chat_id, text=message_markdown, parse_mode=ParseMode.MARKDOWN
+    )
+
+    context.job_queue.run_once(
+        delete_message,
+        timeout_m * 60,
+        context={
+            "chat_id": chat_id,
+            "message_id": sent_message.message_id,
+        },
+    )
