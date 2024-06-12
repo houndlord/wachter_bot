@@ -25,7 +25,18 @@ jobs:
     - name: pip freeze
       run: python -m pip freeze --local
       shell: bash
+      
+    - name: Get changed files
+      id: changed-files
+      run: |
+        echo "::set-output name=files::$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...${{ github.event.pull_request.head.sha }})"
 
     - name: run pre-commit 
-      run: pre-commit run --color=always --show-diff-on-failure
+      run: |
+          FILES="${{ steps.changed-files.outputs.files }}"
+          if [ -n "$FILES" ]; then
+            echo "$FILES" | xargs pre-commit run --files
+          else
+            echo "No files to check."
+          fi
       shell: bash
