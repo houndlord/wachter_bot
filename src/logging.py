@@ -57,3 +57,4 @@ config.dictConfig(log_config)
 tg_logger = logging.getLogger("wachter_telegram_logger")
 
 print("mm")
+print("mm")
