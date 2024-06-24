@@ -1,3 +1,4 @@
+print("")
 _texts = {
     "msg__set_new_message": "Обновил сообщение.",
     "msg__success_set_kick_timeout_response": "Обновил время до удаления.",
