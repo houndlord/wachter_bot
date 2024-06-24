@@ -178,3 +178,5 @@ async def populate_db(async_session):
     async_session.add_all(users + chats)
 
     await async_session.commit()
+
+print("")
