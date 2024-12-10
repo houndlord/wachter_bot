@@ -5,9 +5,12 @@ RUN pip install "setuptools<46" && pip install pipenv
 COPY Pipfile /Pipfile
 COPY Pipfile.lock /Pipfile.lock
 
-RUN pipenv install --system
+RUN pip install "httpcore[asyncio]"
+
+RUN pipenv install --deploy --system
 
 COPY . /app
 WORKDIR /app
 
-CMD alembic upgrade head && python -m app
+RUN ["chmod", "+x", "/app/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]
