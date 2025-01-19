@@ -1,53 +1,41 @@
-import json
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackContext
-
-from src import constants
-from src.model import User, session_scope
-
-from .utils import authorize_user
+from telegram import InlineKeyboardMarkup, Update
+from telegram.ext import ContextTypes
 
 
-# todo @admin decorator to prevent / tweak behaviour when calling from group chats
-# this will be a nice replacement for "if user_id < 0" checks
-def start_handler(update: Update, context: CallbackContext):
+from src.handlers.utils import admin
+from src.texts import _
+
+
+from .utils import get_chats_list, create_chats_list_keyboard
+
+
+@admin
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handle the /start command in a Telegram chat.
+
+    Args:
+    update (Update): The update object that represents the incoming update.
+    context (ContextTypes.DEFAULT_TYPE): The context object that contains information about the current state of the bot.
+
+    Returns:
+    None
+    """
+    # Get the ID of the user who sent the message
     user_id = update.message.chat_id
 
-    if user_id < 0:
-        return
+    # Retrieve the list of chats where the user has administrative privileges
+    user_chats = await get_chats_list(user_id, context)
 
-    with session_scope() as sess:
-        users = sess.query(User).filter(User.user_id == user_id)
-        user_chats = list(_get_chats(users, user_id, context.bot))
-
+    # If the user does not have administrative privileges in any chat, inform them
     if len(user_chats) == 0:
-        update.message.reply_text("У вас нет доступных чатов.")
+        await update.message.reply_text(_("msg__no_chats_available"))
         return
 
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                chat["title"],
-                callback_data=json.dumps(
-                    {"chat_id": chat["id"], "action": constants.Actions.select_chat}
-                ),
-            )
-        ]
-        for chat in user_chats
-        if authorize_user(context.bot, chat["id"], user_id)
-    ]
+    # Create an inline keyboard with the list of available chats
+    reply_markup = InlineKeyboardMarkup(
+        await create_chats_list_keyboard(user_chats, context, user_id)
+    )
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(constants.on_start_command, reply_markup=reply_markup)
-
-
-def _get_chats(users: list, user_id: int, bot: Bot):
-    for x in users:
-        try:
-            if authorize_user(bot, x.chat_id, user_id):
-                yield {
-                    "title": bot.get_chat(x.chat_id).title or x.chat_id,
-                    "id": x.chat_id,
-                }
-        except Exception:
-            pass
+    # Send a message to the user with the inline keyboard
+    await update.message.reply_text(_("msg__start_command"), reply_markup=reply_markup)
